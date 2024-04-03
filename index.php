@@ -1,6 +1,5 @@
 <?php
 
-// Функция для загрузки страницы и создания DOMDocument
 function loadPage($url)
 {
     $html = file_get_contents($url);
@@ -9,7 +8,6 @@ function loadPage($url)
     return $dom;
 }
 
-// Функция для парсинга данных с текущей страницы
 function parseData($dom)
 {
     $xpath = new DOMXPath($dom);
