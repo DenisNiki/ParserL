@@ -1,10 +1,15 @@
 <?php
-
 function loadPage(string $url): DOMDocument
 {
     $html = file_get_contents($url);
+
+    if (empty($html)) {
+        throw new Exception('Не удалось загрузить HTML-контент по указанному URL.');
+    }
+
     $dom = new DOMDocument();
     @$dom->loadHTML($html);
+
     return $dom;
 }
 
@@ -46,9 +51,24 @@ function parseData(DOMDocument $dom): array
     return $combinedData;
 }
 
-function writeDataToTable(int $counter, array $data): void
+function writeToCsv(string $filename, array $data): void
 {
-    echo $counter . '. Имя: ' . $data['name'] . ' | Адрес: ' . $data['address'] . ' | <br> Номер телефона: ' . $data['phone'] . ' | Ссылка на объявление: ' . $data['adLink'] . ' | e-mail: ' . $data['email'] . "<br><br>";
+    $file = fopen($filename, 'w');
+    $headers = ['Имя', 'Адрес', 'Номер телефона', 'Ссылка на объявление', 'E-mail'];
+    fputcsv($file, $headers);
+
+    foreach ($data as $row) {
+        $rowData = [
+            $row['name'],
+            $row['address'],
+            $row['phone'],
+            $row['adLink'],
+            $row['email'],
+        ];
+        fputcsv($file, $rowData);
+    }
+
+    fclose($file);
 }
 
 function scrapeData(string $url): void
@@ -56,6 +76,7 @@ function scrapeData(string $url): void
     $currentPage = 1;
     $totalPages = 1;
     $counter = 1;
+    $allData = [];
 
     while ($currentPage <= $totalPages) {
         $currentUrl = $url . '?page=' . $currentPage;
@@ -63,14 +84,20 @@ function scrapeData(string $url): void
         $dom = loadPage($currentUrl);
         $combinedData = parseData($dom);
 
-        foreach ($combinedData as $index => $data) {
-            writeDataToTable($counter, $data);
+        foreach ($combinedData as $item) {
+            $adDom = loadPage($item['adLink']);
+            $adXpath = new DOMXPath($adDom);
+            $emailElement = $adXpath->query('//div[@class="w-phone"]//a[@class="phone__link email"]');
+            $email = $emailElement->length > 0 ? $emailElement[0]->textContent : '';
+            $item['email'] = $email;
+
+            $allData[] = $item;
             $counter++;
         }
 
-        // Получение общего количества страниц
         if ($currentPage === 1) {
             $paginationLinks = $dom->getElementsByTagName('a');
+
             foreach ($paginationLinks as $link) {
                 if (is_numeric($link->textContent)) {
                     $pageNumber = intval($link->textContent);
@@ -82,7 +109,12 @@ function scrapeData(string $url): void
         $currentPage++;
         sleep(2);
     }
+
+    $filename = 'data.csv';
+    writeToCsv($filename, $allData);
 }
+
+set_time_limit(3600);
 
 $url = 'https://gohome.by/rent/flat/one-day';
 scrapeData($url);
