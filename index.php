@@ -1,9 +1,19 @@
 <?php
+
+ini_set('display_errors', 1);
+ini_set('display_startup_errors', 1);
+error_reporting(E_ALL);
+
+/**
+ * @throws Exception
+ */
 function loadPage(string $url): DOMDocument
 {
+    echo "Загружаем страницу: " . $url . "\n";
+
     $html = file_get_contents($url);
 
-    if (empty($html)) {
+    if ($html === false) {
         throw new Exception('Не удалось загрузить HTML-контент по указанному URL.');
     }
 
@@ -15,6 +25,8 @@ function loadPage(string $url): DOMDocument
 
 function parseData(DOMDocument $dom): array
 {
+    echo "Извлекаем данные из DOM \n";
+
     $xpath = new DOMXPath($dom);
     $divsWithDataObjectID = $xpath->query('//div[@class="col col-main-info"]');
     $phoneLinks = $xpath->query('//a[@class="phone__link"]');
@@ -23,20 +35,35 @@ function parseData(DOMDocument $dom): array
     $combinedData = [];
 
     foreach ($divsWithDataObjectID as $index => $div) {
-        $name = isset($agentInfos[$index]) ? trim($agentInfos[$index]->textContent) : '';
-        $address = isset($adsLinks[$index]) ? $adsLinks[$index]->textContent : '';
-        $phone = isset($phoneLinks[$index]) ? $phoneLinks[$index]->textContent : '';
-        $adLink = isset($adsLinks[$index]) ? 'https://gohome.by' . $adsLinks[$index]->getAttribute('href') : '';
+        $name = '';
+        $address = '';
+        $phone = '';
+        $adLink = '';
+
+        if (isset($agentInfos[$index])) {
+            $name = trim($agentInfos[$index]->textContent);
+        }
+
+        if (isset($adsLinks[$index])) {
+            $address = $adsLinks[$index]->textContent;
+            $adLink = 'https://gohome.by' . $adsLinks[$index]->getAttribute('href');
+        }
+
+        if (isset($phoneLinks[$index])) {
+            $phone = $phoneLinks[$index]->textContent;
+        }
 
         $email = '';
 
-        if (isset($phoneLinks[$index])) {
-            $emailElement = $xpath->query(
-                './/div[@class="w-phone"]//a[@class="phone__link email"]',
-                $phoneLinks[$index]
-            );
-
-            $email = $emailElement->length > 0 ? $emailElement[0]->textContent : '';
+        try {
+            if ($adLink !== '') {
+                $adDom = loadPage($adLink);
+                $adXpath = new DOMXPath($adDom);
+                $emailElement = $adXpath->query('//div[@class="w-phone"]//a[@class="phone__link email"]');
+                $email = $emailElement->length > 0 ? $emailElement[0]->textContent : '';
+            }
+        } catch (Exception $e) {
+            echo 'Произошла ошибка при загрузке страницы объявления: ' . $e->getMessage() . "\n";
         }
 
         $combinedData[] = [
@@ -53,7 +80,9 @@ function parseData(DOMDocument $dom): array
 
 function writeToCsv(string $filename, array $data): void
 {
-    $file = fopen($filename, 'w');
+    echo "Записываем данные в CSV-файл: " . $filename . "\n";
+
+    $file = fopen($filename, 'w', false, stream_context_create(['context' => ['encoding' => 'UTF-8']]));
     $headers = ['Имя', 'Адрес', 'Номер телефона', 'Ссылка на объявление', 'E-mail'];
     fputcsv($file, $headers);
 
@@ -71,50 +100,68 @@ function writeToCsv(string $filename, array $data): void
     fclose($file);
 }
 
-function scrapeData(string $url): void
+/**
+ * @param string $url
+ * @param int $endPagination
+ * @throws Exception
+ */
+function scrapeData(string $url, int $endPagination): void
 {
+    echo "Начинаем сбор данных \n";
+
     $currentPage = 1;
     $totalPages = 1;
-    $counter = 1;
     $allData = [];
 
     while ($currentPage <= $totalPages) {
         $currentUrl = $url . '?page=' . $currentPage;
 
-        $dom = loadPage($currentUrl);
-        $combinedData = parseData($dom);
-
-        foreach ($combinedData as $item) {
-            $adDom = loadPage($item['adLink']);
-            $adXpath = new DOMXPath($adDom);
-            $emailElement = $adXpath->query('//div[@class="w-phone"]//a[@class="phone__link email"]');
-            $email = $emailElement->length > 0 ? $emailElement[0]->textContent : '';
-            $item['email'] = $email;
-
-            $allData[] = $item;
-            $counter++;
+        try {
+            $dom = loadPage($currentUrl);
+        } catch (Exception $e) {
+            echo 'Произошла ошибка при загрузке страницы: ' . $e->getMessage() . "\n";
+            $currentPage++;
+            continue;
         }
 
-        if ($currentPage === 1) {
-            $paginationLinks = $dom->getElementsByTagName('a');
+        $combinedData = parseData($dom);
+        // Фрагмент кода для разделения на части по 50 записей
+        $chunkedData = array_chunk($combinedData, 50);
 
-            foreach ($paginationLinks as $link) {
-                if (is_numeric($link->textContent)) {
-                    $pageNumber = intval($link->textContent);
-                    $totalPages = max($totalPages, $pageNumber);
-                }
+        foreach ($chunkedData as $chunk) {
+            foreach ($chunk as $item) {
+                // Ваш код обработки каждой записи
+                $allData[] = $item;
             }
         }
 
-        $currentPage++;
-        sleep(2);
-    }
+        // Запись данных илидругие операции
 
-    $filename = 'data.csv';
+        if ($currentPage === 1) {
+            $xpath = new DOMXPath($dom);
+            $startPagination = $xpath->query('//div[contains(@class, "row-pagination")]/div[contains(@class, "col-sm-auto")]/a[contains(@class, "__link")]');
+
+            if ($startPagination->length > 0) {
+                $totalPages = $endPagination;
+            }
+        }
+
+        sleep(2);
+
+        $filename = 'data.csv'; // Записываем данные в файл после каждой итерации
+        writeToCsv($filename, $allData);
+
+        $currentPage++;
+    } $filename = 'data.csv';
     writeToCsv($filename, $allData);
 }
-
-set_time_limit(3600);
+set_time_limit(0);
 
 $url = 'https://gohome.by/rent/flat/one-day';
-scrapeData($url);
+$endPagination = 108; // Укажите конечное значение пагинации здесь
+
+try {
+    scrapeData($url, $endPagination);
+} catch (Exception $e) {
+    echo 'Произошла ошибка: ' . $e->getMessage();
+}
